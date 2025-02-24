@@ -1,0 +1,1228 @@
+---
+title: "Group 4 - Starbucks Dataset Analysis"
+author: "Roselle Deinla, Amanda Tormey, Andrea Nguyen"
+date: "2023-04-06"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo = TRUE)
+```
+
+```{r dependencies, include = FALSE}
+library(dplyr)
+library(ggplot2)
+library(yardstick)
+library(class)
+library(Metrics)
+library(infer)
+library(liver)
+library(glmnet)
+```
+
+#### Introduction
+
+
+The Official Starbucks Nutritional Dataset provided by tidytuesdayR is a dataset that provides nutritional information on 93 unique Starbucks drinks over 15 variables. The nutritional quantities consist of calories, cholesterol, saturated and trans fat, sugar, caffeine, sodium and fiber contents. 
+
+All nutrition facts are provided for the 4 drink sizes the company offers (short, tall, grande, venti) scaled accordingly. Additional nutrition information is given based on the 5 milk options (no milk, nonfat, 2%, soy, coconut and whole milk) a drink may have.
+
+The main drive of our analysis is to infer if calories, total fat, and sugar have significant impacts among one another, due to these quantities being the most relevant to consumers.
+In addition, it would be interesting to test their combined influence on nutrition content from drink to drink.
+
+Our following hypothesis tests and models aim to derive the impact that these quantities have on one another, confirm/debunk prior domain knowledge and justify our reasoning on certain assumptions.
+
+It is important to note that there is a fair amount of multicollinearity in our dataset; which given its context makes sense. It will be hard to avoid all of its effects, but our methods have attempted to account for so.
+
+To even the comparisons as much as possible, we are going to only consider the grande size of drink as the nutritional contents increase as the drink size increases (see hypothesis test below). 
+
+The whip variable (binary 0 for no whip, and 1 for whip) is almost exclusively present in the "contains milk" products compared to one observation in the "no milk" products. We are more interested in the presence of milk for our classification models and so we will assume that the impacts, if any, add a small amount of calories, sugar and fat to the "contains milk" products.
+
+We have decided to implement both Regression and Classification models on our dataset.
+
+Our Linear Regression and Regularized Regression models are built to show which variables out of total fat, total carbs and sugar are the best at predicting calorie levels in the starbucks drinks.
+
+Our Classification models are built to predict which drinks contain milk (based on our highlighted variables) and which drinks do not, given that it is treated as more of a categorical variable than a quantity.
+
+Thus, another assumption that will need to be in place is that for all similar types of drinks (i.e. brewed coffees, frappes, refreshers, etc...) the base ingredients are brewed and blended in a consistent fashion. This will be important for all of our testing, but especially in regards to our classification models. Naturally, the nutritional quantities will vary with added flavours and toppings, but we will assume that for all products with the same name that do not heavily depend on differing flavourings (i.e. brewed coffees), the only contributing difference is the type of milk used.
+
+#### Quick Facts & Glimpse of the Data
+
+```{r load data, echo = FALSE}
+starbucks <- read.csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-12-21/starbucks.csv')
+grande_bucks = filter(starbucks, size == "grande")
+
+head(grande_bucks)
+str(grande_bucks)
+summary(grande_bucks[,6:15])
+```
+
+Product name, milk, whip and serving size are not considered in the summary given their descriptive/categorical nature
+
+` `  
+
+```{r milk types, echo = FALSE}
+starbucks %>% filter(size == "grande") %>% ggplot(aes(x = factor(milk), fill = milk)) + geom_bar(show.legend = FALSE) +
+ 
+   scale_x_discrete(breaks = seq(0,5,1),labels = c("No milk", "Nonfat", "2%", "Soy", "Coconut", "Whole")) +
+  scale_fill_gradient(low = "#006241", high = "#cce0d9") +
+  labs(title = "Milk Type Breakdown for Grande-Sized Drinks") 
+
+```
+
+
+First, we will look into the pairwise correlation between the nutritional quantities. Here, we can get an insight into which variables may have strong relations.
+` ` 
+```{r correlation, echo = FALSE}
+
+cor(grande_bucks[,6:15])
+```
+Top 3 strongest positive correlation pairs:
+  
+      - (total_carbs_g, sugar_g) at 0.9784
+      - (calories, total_carbs_g) at 0.8861 
+      - (total_fat_g, cholesterol_mg) at 0.8843
+   
+` ` 
+
+The pairs still give high correlations:
+(total_fat_g, calories) at 0.8062, (sugar, calories) at 0.8533, 
+Luckily, total_fat_g and sugar have a relatively low correlation with one another which could be useful in predicting calories
+(total_fat_g, sugar) at 0.4629
+` ` 
+#### Hypothesis Test
+
+
+To further justify our reasoning in keeping a consistent drink size for our analysis, we will test if there is a mean difference in calories between two sizes of interest; grande and venti. As common knowledge goes, the larger the drink, the greater the volume of ingredients are required, and thus we would expect greater nutritional values.
+
+It would then be reasonable to conduct a t-test to infer if the mean amount of calories in a grande-sized drink are the same as the mean amount of calories in a venti-sized drink.
+
+Similarly, to further explain why sugar would make a good variable to predict whether or not a drink contains milk for our classification models, we will test if drinks containing non-fat milk and whole milk have a greater mean sugar content compared to those without.
+
+As for why those two types of milk are singled out, we will go into further details in the "Classification Model" section.
+
+It is known that both whole milk and nonfat milk contain about 12 grams of sugar per cup. This implies that drinks including these milks will have more sugar than drinks without milk (at least for the same product). 
+
+To prove this, we conducted a hypothesis test to check whether the mean total sugar in a whole milk drink and non-fat milk drink is greater than the mean total sugar in a non-milk drink. 
+
+` ` 
+```{r dataset, echo = FALSE}
+dataset = starbucks%>%filter(size %in% c("grande", "venti"))
+
+dataset %>% group_by(size)%>%summarise(samp_mean = mean(calories), std_err = sd(calories)/sqrt(n()))%>%mutate(low_bd = samp_mean - 1.96*std_err, upp_bd = samp_mean + 1.96*std_err)
+```
+
+$H_0: \mu_g = \mu_v$ vs.
+$Ha: \mu_g \not= \mu_v$
+
+Where $\mu_g$ represents the mean amount of calories in a grande-sized drink,
+and $\mu_v$ for the mean amount of calories in a venti-sized drink.
+
+` ` 
+```{r ttest, echo = FALSE}
+pval = dataset%>%t_test(formula = calories ~ size)
+pval$p_value
+```
+
+The p-value is much smaller than 0.05 so we have enough evidence to reject the null hypothesis at significance level of 0.05
+
+
+We will test both non-fat and whole milk drinks separately as the respective milks are used against non-milk drinks in different models.
+
+In order to conduct the test, we first filter for the whole milk and non-milk types. Then we will conduct a t-test and reject $H_0$ at a 5% significance level.
+
+$H_0: \mu_n = \mu_m$ vs.
+$Ha: \mu_n < \mu_m$
+` ` 
+Where $\mu_m$ represents the mean amount of sugar in a milk-included drink,
+and $\mu_n$ for the mean amount of sugar in drink without milk. Two t-tests will be performed, starting with non-fat milk representing 'm', and followed by whole milk representing 'm'.
+
+` ` 
+```{r, echo = FALSE}
+new_data = filter(starbucks, size == "grande") %>%
+  filter(milk %in% c(0, 1))
+
+new_data$milk=factor(new_data$milk)
+
+pval = new_data %>% t_test(formula = sugar_g ~ milk, alternative = "less")
+#alternative = less
+pval$p_value
+```
+
+```{r, echo = FALSE}
+new_data = filter(starbucks, size == "grande") %>%
+  filter(milk %in% c(0, 5))
+
+new_data$milk=factor(new_data$milk)
+
+pval = new_data %>% t_test(formula = sugar_g ~ milk, alternative = "less")
+#alternative = less
+pval$p_value
+```
+At a significance level of $\alpha = 0.05$, we can clearly reject the null hypothesis. There is enough evidence to suggest that the mean amount of sugar in a non-milk drink is less than both the mean amount of sugar for non-fat and whole-milk drinks.
+
+` ` 
+
+Results
+
+Our hypothesis tests worked in favour towards choosing one standard size of drink for the analysis, and that the mean sugar difference in non-milk and milk-containing drinks do differ by a significant amount, implying that it could be reasonable to classify the drinks on just sugar content alone.
+
+
+
+#### Linear Regression Models
+For our linear regression models we chose to use the variables total fat, calories, and sugar since they are generally the most looked at when choosing a drink based on nutrition and sometimes taste. 
+
+We first did a simplest linear regression model just comparing calories with the data set and without any covariates to get a good baseline model to which we can compare our further tests with. 
+
+The next linear regression model we looked at was the case with a single covariate. This is where we start to test the variables with calories to get an idea as to which ones give us the better model. 
+
+Using our knowledge from our calculations we did previously, when looking at the correlation between the 4 variables we saw that fat and sugar have a low correlation with one another. This could let us believe that these variables could be used to give us more accurate results when trying to predict calorie levels because we know we won’t have any multicollinearity.
+
+```{r datasets, include = FALSE}
+#Training and testing data sets
+set.seed(1)
+
+row.number = sample(1:nrow(grande_bucks), 2/3*nrow(grande_bucks))
+
+train = grande_bucks[row.number,]
+test = grande_bucks[-row.number,]
+#head(test)
+```
+
+Simplest linear regression model for calories
+```{r fit cal, echo = FALSE}
+fit_total_cals = lm(calories ~ 1, data = grande_bucks)
+pred_total_cals = predict(fit_total_cals, newdata = test)
+```
+
+Now we are testing the same variables between one another 
+
+Linear regression between calories and total fat
+```{r fit cal tf, echo = FALSE}
+fit_cals_fat = lm(calories ~ total_fat_g, data = train)
+pred_cals_fat = predict(fit_cals_fat, newdata = test)
+```
+
+Linear regression between calories and sugar
+```{r fit cal sugar, echo = FALSE}
+fit_cals_sugar = lm(calories ~ sugar_g, data = train)
+pred_cals_sugar = predict(fit_cals_sugar, newdata = test)
+```
+linear regression for calories and carbs
+```{r fit cal carbs, echo = FALSE}
+fit_total_carbs_cals = lm(calories ~ total_carbs_g, data = grande_bucks)
+pred_total_carbs_cals = predict(fit_total_carbs_cals, newdata = test)
+```
+
+Finally, we can see how well sugar and total fat together can predict the amount of calories in a drink. 
+` ` 
+```{r fit cal sugar ft, echo = FALSE}
+fit_cals_sugar_fat = lm(calories ~ sugar_g + total_fat_g, data = train)
+pred_cals_sugar_fat = predict(fit_cals_sugar_fat, newdata = test)
+head(pred_cals_sugar_fat)
+```
+
+` ` 
+
+Results
+
+The calculated RMSE values are as follows, in order of calories alone, calories and total fat, calories and sugar, and calories predicted by sugar and total fat:
+
+```{r rmse, echo = FALSE}
+target = test$calories
+rmse_cals = rmse(target, pred_total_cals)
+rmse_cals_fat = rmse(target, pred_cals_fat)
+rmse_cals_sug = rmse(target, pred_cals_sugar)
+rmse_cals_carbs = rmse(target, pred_total_carbs_cals)
+rmse_cals_sug_fat = rmse(target, pred_cals_sugar_fat)
+c(rmse_cals, rmse_cals_fat, rmse_cals_sug, rmse_cals_carbs, rmse_cals_sug_fat)
+```
+After creating the model pairing fat and sugar together and calculating the RMSE value, we do see that pairing fat and sugar together in our linear regression model to predict calories is much more accurate then just using one of the two variables. 
+
+From our correlation calculations above we notice that calories and carbs have a high correlation with one another. This could lead us to believe that using total carbs when predicting calories could give us a good model. 
+
+After creating the linear regression model for carbs and calories we do see that our prediction is right and using carbs to predict calorie levels does give us a lower RMSE value than the previous model that uses fat and sugar.
+
+Here are some plots for the regression models we made above, playing around with non-linear fits 
+
+` `  
+
+
+Regression between calories and total fat with degree 5
+```{r, echo = FALSE, fig.align='center'}
+fit_quint_cals_fat = lm(calories ~ poly(total_fat_g, 5), data = train)
+train %>% bind_cols(.fitted = fitted(fit_quint_cals_fat)) %>% ggplot(aes(x = total_fat_g)) + geom_point(aes(y = calories)) + geom_line(aes(y = .fitted), colour = "blue", size = 1)
+```
+```{r fat poly, echo = FALSE}
+pred_poly_fat = predict(fit_quint_cals_fat, newdata = test)
+rmse_fat_quint = rmse(test$calories, pred_poly_fat)
+rmse_fat_quint
+```
+This provided a very slight improvement in the model
+` ` 
+Regression for calories and sugar with degree 4
+```{r, echo = FALSE, fig.align='center'}
+fit_4_cals_sugar = lm(calories ~ poly(sugar_g, 4), data = train)
+train %>% bind_cols(.fitted = fitted(fit_4_cals_sugar)) %>% ggplot(aes(x = sugar_g)) + geom_point(aes(y = calories)) + geom_line(aes(y = .fitted), colour = "blue", size = 1)
+```
+
+```{r sugar poly, echo = FALSE}
+pred_poly_sugar = predict(fit_4_cals_sugar, newdata = test)
+rmse_fat_sugar = rmse(test$calories, pred_poly_sugar)
+rmse_fat_sugar
+```
+Here, we see that the rmse value actually worsened by changing the degree.
+` ` 
+Regression for calories based on total fat and sugar with a degree of 2
+```{r, echo = FALSE, fig.align = 'center'}
+fit_poly_fat_sugar = lm(calories ~ polym(total_fat_g, sugar_g, degree = 2, raw = TRUE), data = train)
+train %>% bind_cols(.fitted = fitted(fit_poly_fat_sugar)) %>% ggplot(aes(x = sugar_g + total_fat_g)) + geom_point(aes(y = calories)) + geom_line(aes(y = .fitted), colour = "blue", size = 1)
+pred_polym = predict(fit_poly_fat_sugar, newdata = test)
+```
+
+The graph perfectly visualizes the better fit compared to the sugar and fat models on their own (although similar to the quintic fit of the calories ~ total fat model, the degree change only improved the model slightly)
+
+
+#### Regularized Regression Models
+
+Research has shown that each gram of fat yields 9 calories ,each gram of sugar yields 4 calories and each gram of carbohydrates yields 4 calories. This shows that fat, sugar and carbs contents has an impact on the amount of calories of the drinks. 
+
+We conducted a study to show that there is evidence of multicollinearity between covariates if we choose to include more covariates to predict calorie levels. Take for example, taking into account the total carbs in a drink in addition to sugar levels could improve the model. But, sugar and total carbs unsurprisingly are highly correlated. 
+
+As a result, we can use a Regularized Regression model to improve the performance. We would like to compare between the Ordinary Least Squares regression model, Ridge Regression model and Lasso Regression Model to decide which model gives us the best prediction of calories based on sugar, total fat and total carbs
+
+` ` 
+```{r, echo = FALSE}
+grande_bucks %>%
+  summarise ( cal_sug_corr = cor(calories, sugar_g), cal_fat_corr = cor(calories, total_fat_g), sug_fat_corr= cor(sugar_g ,total_fat_g), sug_carbs_corr = cor(sugar_g, total_carbs_g))
+
+```
+` `  
+
+Firstly, we conducted an Ordinary Least Regression model to predict the amount of calories based on sugar, total_fat and total_carbs
+` ` 
+
+```{r, include = FALSE}
+fit= lm(calories~ sugar_g+total_fat_g+total_carbs_g ,data=train )
+
+pred_ols = predict(fit, newdata = test)
+rmse_ols = rmse(test$calories, pred_ols)
+
+X=model.matrix(fit)
+y=train$calories
+
+```
+` ` 
+Secondly, we create the Ridge Regression Model . We first find the estimated beta values using the following matrix equation . Set lambda=0.1
+\[\hat{\beta}_\lambda = (\mathbb{X}^T\mathbb{X} + \lambda I_p)^{-1}\mathbb{X}^T\mathbb{Y}\]
+` ` 
+RMSE from the Ridge fit:
+```{r, echo = FALSE}
+lambda=0.1
+p=ncol(X)
+
+beta_ridge= solve(crossprod(X) + diag(lambda,ncol=p,nrow=p)) %*%
+  crossprod(X,y)
+beta_ridge[,1]
+
+X_test= model.matrix(~ sugar_g+total_fat_g+total_carbs_g,data=test)
+X_test=as.matrix(X_test)
+y_test= test$calories
+y_pred=X_test %*% beta_ridge
+
+rmse_ridge= sqrt(mean(y_test-y_pred )^2)
+rmse_ridge
+```
+` `  
+
+As we plot RMSE with the change of lambda values, there is a positive relationship between them. Hence, as lambda increases, the RMSE increases. In this case, we want to minimize the RMSE, so we need to minimize lambda. By choosing a small lambda value ( 0.1), we will get a relatively small RMSE. The relationship between the lambda value and RMSE can be shown in the graph. 
+
+```{r, echo = FALSE, fig.align='center'}
+lambda_vect <- seq(0,5, by = 0.1)
+p=ncol(X)
+#function to calculate rmse values for the given lambda value 
+rmse_calc <- function (lambda) {
+  beta_ridge <- solve(crossprod(X) + lambda*diag(p)) %*%
+    crossprod(X, y)
+  y_pred <- X_test %*% beta_ridge
+  
+  return(sqrt(mean((y_test - y_pred)^2)))
+}
+
+rmse_vect <- sapply(lambda_vect, rmse_calc )
+
+#dataframe with lambda and rmse values
+tibble(lambda = lambda_vect,
+       RMSE = rmse_vect) |> 
+  ggplot(aes(x = lambda, y = RMSE)) +
+  geom_line()
+
+```
+` ` 
+
+Thirdly, we created a Lasso Regression. We expect this method to improve the prediction ability of the model. 
+```{r, echo = FALSE}
+X= X[,-1]
+fit_lasso=glmnet(X,y)
+```
+
+Plot the coefficient values with the change of log lambda values in the Lasso Regression model . One can see that, as $\lambda$ increases, the coefficient estimates b i are “shrunk” towards zero which means that the norm of the estimates vector decreases.
+```{r, echo = FALSE, fig.align = 'center'}
+plot(fit_lasso,xvar="lambda")
+```
+RMSE from the lasso fit:
+```{r, echo = FALSE}
+#Use predict to get prediction 
+X_test= X_test[,-1]
+pred_lasso = predict(fit_lasso, newx=X_test,s=lambda)
+
+#Find RMSE
+rmse_lasso=sqrt(mean((y_test-pred_lasso)^2))
+rmse_lasso
+```
+` `  
+
+Results
+
+We compared the value between RMSE from ridge and lasso regression.RMSE from Ridge Regression model is 0.47 while RMSE from Lasso Regression model is 17.03 and RMSE from Original Least Squares Regression is 17.07.  
+
+In this case, Ridge regression gives the best prediction of calories as a function of sugar, total fat and total carbs, because the lower the RMSE the better the prediction. In this case, variables in the dataset are highly correlated, Ridge regression can be more effective than Lasso regression because it does not perform feature selection and instead shrinks the coefficients of all variables.
+
+Lasso may not work as well given that many of the variables are interconnected on a chemical/composition-based level.
+
+```{r}
+c(rmse_ols, rmse_ridge,rmse_lasso)
+```
+
+
+##### Classification Models
+
+
+We have constructed both Logistic Regression and k Nearest Neighbours to build a classifier that could predict which drinks contain milk and which do not.
+
+Since the milk variable is categorical, we cannot easily do a correlation test to select the most appropriate covariates. Luckily our highlighted variables make a good start based on common knowledge. 
+
+For reference/further claim we have used [healthline’s](https://www.healthline.com/health/milk-almond-cow-soy-rice#cows-milk) comparison on various milk types per 1 cup serving. With whole milk, soy and coconut being most relevant to our dataset, it is clear to see that there is a noticeable difference in calories, total carbs and fat contents between the types.
+
+An assumption to make would be that drinks containing milk have higher sugar, calorie and fat contents, given the nature of this ingredient. This would give reason to easier classification  between a "refresher" product (which consists of an ice blended fruit tea) and a "frappe" product (consisting of blended ice, coffee and higher prevalence of milk). However, we may expect to run into a grey area when it comes to drinks which are already low in sugar, fat and calories (black, dark roasted coffee for example) where the addition of milk would increase such values, but still be within a "non-milk" range. 
+
+As stated previously, there is a high amount of multicollinearity in our dataset. While a logistic regression classifier model could be constructed with the least amount of multicollinearity possible, such covariates would not make much sense.
+
+Milk being a [typically] fatty-based dairy beverage would not be best predicted on fiber and caffeine contents (which are the least correlated among the variables in the dataset), even when combined with one of our highlighted variables. Achieving decent metrics on a Logistic model would not be possible without multicollinearity.  
+
+However, it would still be interesting to test the Logistic metrics against a k Nearest Neighbour model which does not need many strict assumptions.
+
+The metrics selected to conduct performance are accuracy, precision, recall and ROC curves.
+Accuracy, precision and recall are the standard determinants of performance, while ROC curves provide a good visualization given that the standard metrics may only differ in the hundred-thousand + decimal place. 
+
+In order to not completely skew such metrics, the dataset must further be filtered before constructing any models. Drinks containing milk far outnumber those without (88% vs 12%), so only the nonfat milk type was kept in with the no milk drinks for the logistic models. While the data would still be quite imbalanced, nonfat milk offers the most amount of unique products and brings the split to be about 63% milk vs 37 % no milk. 
+
+Under this, we would expect to see a high recall value given such odds, especially since we are always guessing on the positive.
+
+“Best” models would then be defined to have the highest possible metric values, with recall and precision being as balanced as possible. 
+
+The "better" models may give higher results due to the sample. To combat this we will re-sample the train and test data sets 1000 times and compute the mean metric values to better grasp model performance.
+
+Two simple Logistic models have been fitted; one predicting milk with total fat, calories and sugar as covariates. The second “better” model adds total carbs to the mix which maximizes performance metrics (given its high correlation with both calories and sugar).
+
+We will construct the logistic models as-is, and assume that all necessary conditions [except for multicollinearity] are met.
+
+On the k nearest neighbor models, further processing would be needed. KNN models perform poorly on imbalanced datasets, and so using whole milk type drinks instead of nonfat brings the dataset to have a 59% milk vs 41% no milk split. While further drinks could be pruned from the “contains milk” side, it felt more appropriate to keep all the drink types in. 
+
+Additionally, the covariates needed to be normalized. Covariates were transformed using the min-max method despite having enough drinks to use the z-score. It would not make sense to have negative values given the context of the data.
+
+Our k value was picked based on further [reading](https://discuss.analyticsvidhya.com/t/how-to-choose-the-value-of-k-in-knn-algorithm/2606
+). The square root of the number of observations maximizes the k-value and accounts for the increase in bias. Assuming this would be the number of observations in the test dataset, the square root of the number of observations is approximately 8.37. We still want an odd k-value to avoid ties, so a k value of 7 was chosen.
+
+` `  
+
+Results
+
+
+Following are tables of the actual vs. predicted results for the "base" logistic model, then our "best" logistic model. In order of accuracy, recall then precision, the metrics for each model (base then best) are provided: 
+` ` 
+```{r logistic, echo = FALSE}
+logit_data = starbucks %>% filter(milk %in% c(0, 1), size == "grande")
+#only consider drinks with no milk, and drinks with the "non-fat" type
+#non-fat type has the most number of drinks assoc. from the milk types
+#would be too imbalanced considering multiple milk types
+#don't need to create a numeric binary column when using "milk 0" and "milk 1"
+set.seed(2)
+divide_rows = sample(1:nrow(logit_data), 2/3*nrow(logit_data))
+train_logit = logit_data[divide_rows,]
+test_logit = logit_data[-divide_rows,]
+
+logit_model2 = glm(milk ~ sugar_g + calories + total_fat_g + total_carbs_g, 
+                  data = train_logit, family = "binomial")
+probabilities2 = logit_model2 %>% predict(test_logit, type = "response")
+predicted_class = ifelse(probabilities2 > 0.5, "Contains Milk", "No Milk Added")
+test_logit['Predicted2'] = as.numeric(predicted_class == "Contains Milk")
+
+actual_vals = test_logit$milk
+predicted_vals = test_logit$Predicted2
+table(actual_vals, predicted_vals)
+
+logit_model = glm(milk ~ sugar_g + calories + total_fat_g, data = train_logit,
+                  family = "binomial")
+probabilities = logit_model %>% predict(test_logit, type = "response")
+predicted_class = ifelse(probabilities > 0.5, "Contains Milk", "No Milk Added")
+test_logit['Predicted'] = as.numeric(predicted_class == "Contains Milk")
+
+predicted_vals = test_logit$Predicted
+table(actual_vals, predicted_vals)
+
+logit_accuracy = accuracy(test_logit$milk, 
+                          test_logit$Predicted)
+logit_recall = recall(test_logit$milk, 
+                      test_logit$Predicted)
+logit_precision = precision(test_logit$milk, 
+                            test_logit$Predicted)
+logit_accuracy2 = accuracy(test_logit$milk, 
+                          test_logit$Predicted2)
+logit_recall2 = recall(test_logit$milk, 
+                      test_logit$Predicted2)
+logit_precision2 = precision(test_logit$milk, 
+                            test_logit$Predicted2)
+
+c(logit_accuracy, logit_recall, logit_precision)
+c(logit_accuracy2, logit_recall2, logit_precision2)
+```
+` ` 
+
+Before computing our 1000 mean metric results, we can infer into the model performance by viewing their ROC curves:
+
+```{r roc, echo = FALSE, fig.align = 'center'}
+modelled_data <- bind_rows(
+  tibble(truth = factor(train_logit$milk), 
+         estimate = fitted(logit_model),
+         model = "Base Logit"),
+  tibble(truth = factor(train_logit$milk),
+         estimate = fitted(logit_model2),
+         model = "Best Logit"))
+  
+modelled_data %>% 
+  group_by(model) %>% 
+  roc_curve(truth, estimate,
+            event_level = "second") %>% 
+  autoplot()
+```
+` ` 
+Now onto resampling our models, with the "base" Logistic model first then our "best":
+
+The following printed calculated metrics are for the "base" model first, then the "best" model.
+
+```{r logit2, echo = FALSE}
+accuracies = rep(0, 1000)
+recalls = rep(0, 1000)
+precisions = rep(0, 1000)
+accuracies_2 = rep(0, 1000)
+recalls_2 = rep(0, 1000)
+precisions_2 = rep(0, 1000)
+set.seed(NULL)
+for(i in 1:1000){
+  divide_rows = sample(1:nrow(logit_data), 2/3*nrow(logit_data))
+  train_logit = logit_data[divide_rows,]
+  test_logit = logit_data[-divide_rows,]
+  
+  logit_model = glm(milk ~ sugar_g + calories + total_fat_g, 
+                    data = train_logit, family = "binomial")
+  logit_model2 = glm(milk ~ sugar_g + calories + total_fat_g + total_carbs_g,
+                     data = train_logit, family = "binomial")
+  
+  probabilities = logit_model %>% predict(test_logit, type = "response")
+  predicted_class <- ifelse(probabilities > 0.5, "Contains Milk", "No Milk Added")
+  test_logit['Predicted'] <- predicted_class
+  
+  
+  accuracies[i] = accuracy(test_logit$milk, 
+                           as.numeric(test_logit$Predicted == "Contains Milk"))
+  recalls[i] = recall(test_logit$milk, 
+                      as.numeric(test_logit$Predicted == "Contains Milk"))
+  precisions[i] = precision(test_logit$milk, 
+                            as.numeric(test_logit$Predicted == "Contains Milk"))
+  
+  logit_model2 = glm(milk ~ sugar_g + calories + total_fat_g + total_carbs_g, 
+                     data = train_logit, family = "binomial")
+  probabilities2 = logit_model2 %>% predict(test_logit, type = "response")
+  predicted_class2 <- ifelse(probabilities2 > 0.5, "Contains Milk", "No Milk Added")
+  test_logit['Predicted2'] <- predicted_class2
+  
+  accuracies_2[i] = accuracy(test_logit$milk, 
+                             as.numeric(test_logit$Predicted2 == "Contains Milk"))
+  recalls_2[i] = recall(test_logit$milk, 
+                        as.numeric(test_logit$Predicted2 == "Contains Milk"))
+  precisions_2[i] = precision(test_logit$milk, 
+                              as.numeric(test_logit$Predicted2 == "Contains Milk"))
+  
+}
+
+logit_metrics = c(mean(accuracies), mean(recalls), mean(precisions))
+logit_metrics2 = c(mean(accuracies_2), mean(recalls_2), mean(precisions_2))
+
+logit_metrics
+logit_metrics2
+
+```
+` ` 
+Following the logistic model, what we would assume to be the more appropriate classifier is the KNN model.
+```{r k neighbours, echo = FALSE}
+#using whole milk to better balance the dataset
+#using min-max to normalize the data to keep only positive values
+nn_data = starbucks %>% filter(milk %in%  c(0,5), size == "grande")
+nn_data$milk = as.numeric(nn_data$milk == 5)
+nn_data = nn_data[,-c(2,4,5,8,9,13)]
+nn_data$calories = transform(nn_data$calories, method = "minmax")
+nn_data$total_fat_g = transform(nn_data$total_fat_g, method = "minmax")
+nn_data$cholesterol_mg = transform(nn_data$cholesterol_mg, method = "minmax")
+nn_data$sodium_mg = transform(nn_data$sodium_mg, method = "minmax")
+nn_data$total_carbs_g = transform(nn_data$total_carbs_g, method = "minmax")
+nn_data$sugar_g = transform(nn_data$sugar_g, method = "minmax")
+nn_data$caffeine_mg = transform(nn_data$caffeine_mg, method = "minmax")
+#lots of multicollinearity in dataset
+#attempt to use nearest neighbours instead
+set.seed(2)
+divide_rows = sample(1:nrow(nn_data), 2/3*nrow(nn_data))
+train_nn = nn_data[divide_rows,]
+test_nn = nn_data[-divide_rows,]
+
+#checking total_fat_g,  calories and sugar_g
+predictions = knn(train = train_nn[,c(3,4,8)], test = test_nn[,c(3,4,8)],
+                  cl = train_nn[,2], k = 7)
+#add in total_carbs_g as per the logistic model
+predictions2 = class::knn(train = train_nn[,c(3,4,6,8)], test = test_nn[,c(3,4,6,8)], 
+                         cl = train_nn$milk, k = 5)
+
+test_nn$predictions = as.factor(predictions)
+test_nn$predictions2 = as.factor(predictions2)
+
+acc_nn = accuracy(test_nn$milk, test_nn$predictions)
+rec_nn = recall(as.numeric(test_nn$milk == 1),
+                as.numeric(test_nn$predictions == 1))
+prec_nn = precision(test_nn$milk, test_nn$predictions)
+
+acc_nn2 = accuracy(test_nn$milk, test_nn$predictions2)
+rec_nn2 = recall(as.numeric(test_nn$milk == 1),
+                 as.numeric(test_nn$predictions2 == 1))
+prec_nn2 = precision(test_nn$milk, test_nn$predictions2)
+
+c(acc_nn, rec_nn, prec_nn)
+c(acc_nn2, rec_nn2, prec_nn2)
+```
+` ` 
+
+For a set seed of 2, the model with total carbs added gave significantly better accuracy and noticeably better recall and precision. 
+
+Instead of a table, we can better view our preliminary results with a bar plot:
+
+```{r knn plot, echo = FALSE, fig.align='center'}
+#visualize table values as a bar plot
+milk = test_nn$milk
+type = rep("actual", length(milk))
+actual = data.frame(milk, type)
+milk = test_nn$predictions
+type = rep("predictions", length(milk))
+predicts = data.frame(milk, type)
+milk = test_nn$predictions2
+type = rep("predictions2", length(milk))
+predicts2 = data.frame(milk, type)
+
+
+table_frame = rbind(actual, predicts, predicts2)
+
+table_frame %>% ggplot(aes(x = milk, fill = type)) + 
+  geom_bar(position = "dodge") +
+  scale_y_continuous(breaks = seq(0,24,2)) +
+  scale_fill_manual(values = c("#00704A","#66a18d","#b3d0c6"),
+                    labels = c("Actual", "Best, k-7 Model", "3-Var, k-7 Model")) +
+  labs(title = "Nearest Neighbour Model Comparison")
+``` 
+
+` ` 
+As previously conducted, we will resample the train and test datasets among different seeds, and calculate the mean metric values to better understand each model's performance.
+
+The "base" KNN model metrics come first, followed by our "best" KNN model:
+
+```{r knn metrics, echo = FALSE}
+nn_accuracies = rep(0,1000)
+nn_recalls = rep(0,1000)
+nn_precisions = rep(0,1000)
+
+nn_accuracies2 = rep(0,1000)
+nn_recalls2 = rep(0,1000)
+nn_precisions2 = rep(0,1000)
+
+#again, sample 1000 times and take the mean metric values
+set.seed(NULL)
+for(i in 1:1000){
+  divide_rows = sample(1:nrow(nn_data), 2/3*nrow(nn_data))
+  train_nn = nn_data[divide_rows,]
+  test_nn = nn_data[-divide_rows,]
+  
+  predictions = knn(train = train_nn[,c(3,4,8)], test = test_nn[,c(3,4,8)],
+                    cl = train_nn[,2], k = 7)
+  predictions2 = knn(train = train_nn[,c(3,4,6,8)], test = test_nn[,c(3,4,6,8)],
+                    cl = train_nn[,2], k = 7)
+  
+  #most optimized k value is 7
+  actual_vals = as.numeric(test_nn$milk)
+  nn_accuracies[i] = accuracy(actual_vals, predictions)
+  nn_recalls[i] = recall(actual_vals, as.numeric(predictions == 1))
+  nn_precisions[i] = precision(actual_vals, predictions)
+  nn_accuracies2[i] = accuracy(actual_vals, predictions2)
+  nn_recalls2[i] = recall(actual_vals, as.numeric(predictions2 == 1))
+  nn_precisions2[i] = precision(actual_vals, predictions2)
+  
+
+} 
+nn_metrics = c(mean(nn_accuracies), mean(nn_recalls), mean(nn_precisions))
+nn_metrics2 = c(mean(nn_accuracies2), mean(nn_recalls2), mean(nn_precisions2))
+
+nn_metrics
+nn_metrics2
+```
+` ` 
+We can now compare the metric values between all the fitted models:
+
+```{r metrics, echo = FALSE}
+metric_accuracies = c(mean(accuracies_2), mean(accuracies), mean(nn_accuracies2), mean(nn_accuracies))
+metric_recalls = c(mean(recalls_2), mean(recalls), mean(nn_recalls2), mean(nn_recalls))
+metric_precisions = c(mean(precisions_2), mean(precisions), mean(nn_precisions2), mean(nn_precisions))
+models = c("Base_Logit", "Best_Logit", "Base_NN","Best_NN")
+compare_metrics = data.frame(metric_accuracies, metric_recalls, metric_precisions, models)
+colnames(compare_metrics) = c("Mean Accuracy", "Mean Recall", "Mean Precision","Model")
+compare_metrics
+```
+
+Given the values above, we can make good predictions on which drinks have milk in them compared to those that do not based on their calories, total fat and sugar content.
+
+` `  
+
+#### Conclusion
+
+For our linear regression model, we found that using carbs to predict calories gave us the best model overall. This was probably due to the fact that the two variables had a high correlation with one another. 
+
+We couldn’t pair up sugar or fat with carbs to improve this model further since carbs had a high correlation with both sugar and fat which could give us inaccurate results due to multicollinearity. However, we were able to pair up fat and sugar because of the low correlation between the two variables. 
+
+After doing this we did get a lower rmse value than the models made when using fat or sugar as a single covariate but not a lower rmse value than the model used by just using carbs as a covariate. 
+
+This data provides the first assessment of the relationship between sugar contents, fat content and calories in Starbucks drinks. These findings indicate that there is a strong correlation between the covariates( sugar and total carbs). Applying a Ridge Regression Model to predict the amount of calories in a drink is the best option among Ridge Regression Model, Lasso Regression model, and Ordinary Linear Squares. 
+ 
+The nutritional quantities as we have shown have high multicollinearity among one another, but all play their own roles in regards to the nutrition of a drink. Selecting certain covariates does simplify the model, but in reality, the quantities are deeply interconnected. Thus, shrinking the adverse effects would be the more reasonable (and best) approach.
+
+The classification models supported that calories, total fat and sugar alone can make decent predictions on the content of milk in a drink. 
+While those variables alone did not make the most optimized model in terms of metrics, they still held their ground against the "better" models.
+Connecting to the Occam's Razor Principle, while the additional variable does not drastically decrease simplicity, given the end difference in metrics, such an addition may not be worth the extra ~ 1% increase.
+
+It would be compelling to see if we could further classify the drinks into more distinct types (refreshers, frappes, simple coffee, cold brews, etc…) similar to that of a Starbucks menu. Though, due to time constraints and complexity, we may not get accurate or reasonable results with our current knowledge.
+
+With a more complex starbucks data set it could also be more interesting to look at the different trends in the type of people that tend to buy more Starbucks than others. Looking at variables such as gender, age, income, etc. could’ve been more interesting data to make predictions about when it comes to regression. 
+
+By conducting this analysis, we have confirmed from the linear regression and regularized regression models, the nutritional effects that sugar and total fat have on calorie content. We also confirmed from the classification models when combining these variables together, we can sort different drinks based on their milk contents.
+
+` ` 
+
+#### References
+
+How to choose the value of K in knn algorithm. Analytics Vidhya. Available online:
+https://discuss.analyticsvidhya.com/t/how-to-choose-the-value-of-k-in-knn-algorithm/2606
+
+Here are the facts: The sugar in dairy milk is nothing to fear. Here’s why: Available online: https://gonnaneedmilk.com/articles/the-sugar-in-dairy-milk-is-nothing-to-fear-heres-why/#:~:text=Milk%20contains%2012%20grams%20of,nutritional%20labels%20on%20milk%20cartons.
+https://www.nal.usda.gov/programs/fnic#:~:text=How%20many%20calories%20are%20in,provides%209%20calories%20per%20gram.
+
+The Ingredient with Many Different Names: Added Sugars. Available online: https://www.heart.org/en/healthy-living/healthy-eating/eat-smart/sugar/added-sugars#:~:text=There%20are%20four%20calories%20in,not%20counting%20the%20other%20ingredients.
+
+What Nutrition Facts Users observe: Nutrition Facts. Available online: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5797995/
+
+#### Appendix 
+
+##### Intro/setup
+```{r, eval = FALSE}
+library(dplyr)
+library(ggplot2)
+library(yardstick)
+library(class)
+library(Metrics)
+library(infer)
+library(liver)
+library(glmnet)
+```
+
+
+##### Glimpse of the Data & Quick Facts
+```{r, eval = FALSE}
+starbucks <- read.csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-12-21/starbucks.csv')
+grande_bucks = filter(starbucks, size == "grande")
+
+head(grande_bucks)
+str(grande_bucks)
+summary(grande_bucks[,6:15])
+```
+
+```{r, eval = FALSE}
+starbucks %>% filter(size == "grande") %>% ggplot(aes(x = factor(milk), fill = milk)) + 
+  geom_bar(show.legend = FALSE) +
+ 
+  scale_x_discrete(breaks = seq(0,5,1),
+                   labels = c("No milk", "Nonfat", "2%", "Soy", "Coconut", "Whole")) +
+  scale_fill_gradient(low = "#006241", high = "#cce0d9") +
+  labs(title = "Milk Type Breakdown for Grande-Sized Drinks") 
+
+```
+
+```{r, eval = FALSE}
+cor(grande_bucks[,6:15])
+```
+
+##### Hypothesis Test
+
+```{r, eval = FALSE}
+dataset = starbucks%>%filter(size %in% c("grande", "venti"))
+
+dataset %>% group_by(size)%>%
+  summarise(samp_mean = mean(calories), std_err = sd(calories)/sqrt(n()))%>%
+  mutate(low_bd = samp_mean - 1.96*std_err, upp_bd = samp_mean + 1.96*std_err)
+```
+
+```{r, eval = FALSE}
+pval = dataset%>%t_test(formula = calories ~ size)
+pval$p_value
+```
+
+```{r, eval = FALSE}
+new_data = filter(starbucks, size == "grande") %>%
+  filter(milk %in% c(0, 1))
+
+new_data$milk=factor(new_data$milk)
+
+pval = new_data %>% t_test(formula = sugar_g ~ milk, alternative = "less")
+#alternative = less
+pval$p_value
+```
+
+```{r, eval = FALSE}
+new_data = filter(starbucks, size == "grande") %>%
+  filter(milk %in% c(0, 5))
+
+new_data$milk=factor(new_data$milk)
+
+pval = new_data %>% t_test(formula = sugar_g ~ milk, alternative = "less")
+#alternative = less
+pval$p_value
+```
+
+##### Linear Regression
+
+```{r, include = FALSE}
+#Training and testing data sets
+set.seed(1)
+
+row.number = sample(1:nrow(grande_bucks), 2/3*nrow(grande_bucks))
+
+train = grande_bucks[row.number,]
+test = grande_bucks[-row.number,]
+#head(test)
+```
+
+```{r, eval = FALSE}
+fit_total_cals = lm(calories ~ 1, data = grande_bucks)
+pred_total_cals = predict(fit_total_cals, newdata = test)
+```
+
+```{r, eval = FALSE}
+fit_cals_fat = lm(calories ~ total_fat_g, data = train)
+pred_cals_fat = predict(fit_cals_fat, newdata = test)
+```
+
+```{r, eval = FALSE}
+fit_cals_sugar = lm(calories ~ sugar_g, data = train)
+pred_cals_sugar = predict(fit_cals_sugar, newdata = test)
+```
+
+```{r, eval = FALSE}
+fit_total_carbs_cals = lm(calories ~ total_carbs_g, data = grande_bucks)
+pred_total_carbs_cals = predict(fit_total_carbs_cals, newdata = test)
+```
+
+```{r, eval = FALSE}
+fit_cals_sugar_fat = lm(calories ~ sugar_g + total_fat_g, data = train)
+pred_cals_sugar_fat = predict(fit_cals_sugar_fat, newdata = test)
+```
+
+```{r, eval = FALSE}
+target = test$calories
+rmse_cals = rmse(target, pred_total_cals)
+rmse_cals_fat = rmse(target, pred_cals_fat)
+rmse_cals_sug = rmse(target, pred_cals_sugar)
+rmse_cals_carbs = rmse(target, pred_total_carbs_cals)
+rmse_cals_sug_fat = rmse(target, pred_cals_sugar_fat)
+c(rmse_cals, rmse_cals_fat, rmse_cals_sug, rmse_cals_carbs, 
+  rmse_cals_sug_fat)
+```
+
+```{r, eval = FALSE, fig.align='center'}
+fit_quint_cals_fat = lm(calories ~ poly(total_fat_g, 5),
+                        data = train)
+train %>% 
+  bind_cols(.fitted = fitted(fit_quint_cals_fat)) %>% 
+  ggplot(aes(x = total_fat_g)) + 
+  geom_point(aes(y = calories)) + 
+  geom_line(aes(y = .fitted), colour = "#00704A", size = 1)
+```
+
+```{r, eval = FALSE}
+pred_poly_fat = predict(fit_quint_cals_fat, newdata = test)
+rmse_fat_quint = rmse(test$calories, pred_poly_fat)
+rmse_fat_quint
+```
+
+```{r, eval = FALSE, fig.align='center'}
+fit_4_cals_sugar = lm(calories ~ poly(sugar_g, 4), 
+                      data = train)
+train %>% 
+  bind_cols(.fitted = fitted(fit_4_cals_sugar)) %>% 
+  ggplot(aes(x = sugar_g)) + 
+  geom_point(aes(y = calories)) + 
+  geom_line(aes(y = .fitted), colour = "#00704A", size = 1)
+```
+
+```{r, eval = FALSE}
+pred_poly_sugar = predict(fit_4_cals_sugar, newdata = test)
+rmse_fat_sugar = rmse(test$calories, pred_poly_sugar)
+rmse_fat_sugar
+```
+
+```{r, eval = FALSE, fig.align = 'center'}
+fit_poly_fat_sugar = lm(calories ~ polym(total_fat_g, 
+                                         sugar_g, degree = 2, raw = TRUE),
+                        data = train)
+train %>% bind_cols(.fitted = fitted(fit_poly_fat_sugar)) %>% 
+  ggplot(aes(x = sugar_g + total_fat_g)) + 
+  geom_point(aes(y = calories)) + 
+  geom_line(aes(y = .fitted), colour = "#00704A", size = 1)
+pred_polym = predict(fit_poly_fat_sugar, newdata = test)
+```
+
+##### Regularized Regression
+
+```{r, eval = FALSE}
+check_corr = grande_bucks %>%
+  summarise ( cal_sug_corr = cor(calories, sugar_g), 
+              cal_fat_corr = cor(calories, total_fat_g), 
+              sug_fat_corr= cor(sugar_g ,total_fat_g), 
+              sug_carbs_corr = cor(sugar_g, total_carbs_g))
+
+```
+
+```{r, eval = FALSE}
+fit= lm(calories~ sugar_g+total_fat_g+total_carbs_g,
+        data=train )
+
+pred_ols = predict(fit, newdata = test)
+rmse_ols = rmse(test$calories, pred_ols)
+
+X=model.matrix(fit)
+y=train$calories
+
+```
+
+```{r, eval = FALSE}
+lambda=0.1
+p=ncol(X)
+
+beta_ridge= solve(crossprod(X) + diag(lambda,ncol=p,nrow=p)) %*%
+  crossprod(X,y)
+beta_ridge[,1]
+
+X_test= model.matrix(~ sugar_g+total_fat_g+total_carbs_g,
+                     data=test)
+X_test=as.matrix(X_test)
+y_test= test$calories
+y_pred=X_test %*% beta_ridge
+
+rmse_ridge= sqrt(mean(y_test-y_pred )^2)
+```
+
+```{r, eval = FALSE, fig.align='center'}
+lambda_vect <- seq(0,5, by = 0.1)
+p=ncol(X)
+#function to calculate rmse values for the given lambda value 
+rmse_calc <- function (lambda) {
+  beta_ridge <- solve(crossprod(X) + lambda*diag(p)) %*%
+    crossprod(X, y)
+  y_pred <- X_test %*% beta_ridge
+  
+  return(sqrt(mean((y_test - y_pred)^2)))
+}
+
+rmse_vect <- sapply(lambda_vect, rmse_calc )
+
+#dataframe with lambda and rmse values
+tibble(lambda = lambda_vect,
+       RMSE = rmse_vect) |> 
+  ggplot(aes(x = lambda, y = RMSE)) +
+  geom_line()
+
+```
+
+```{r, eval = FALSE}
+X= X[,-1]
+fit_lasso=glmnet(X,y)
+```
+
+```{r, eval = FALSE, fig.align = 'center'}
+plot(fit_lasso,xvar="lambda")
+```
+
+```{r, eval = FALSE}
+#Use predict to get prediction 
+X_test= X_test[,-1]
+pred_lasso = predict(fit_lasso, newx=X_test,s=lambda)
+
+#Find RMSE
+rmse_lasso=sqrt(mean((y_test-pred_lasso)^2))
+rmse_lasso
+```
+
+```{r}
+c(rmse_ols, rmse_ridge,rmse_lasso)
+```
+
+##### Classification
+
+```{r, eval = FALSE}
+logit_data = starbucks %>% filter(milk %in% c(0, 1), 
+                                  size == "grande")
+#only consider drinks with no milk, and drinks with the "non-fat" type
+#non-fat type has the most number of drinks assoc. from the milk types
+#would be too imbalanced considering multiple milk types
+#don't need to create a numeric binary column when using 
+#"milk 0" and "milk 1"
+set.seed(2)
+divide_rows = sample(1:nrow(logit_data), 2/3*nrow(logit_data))
+train_logit = logit_data[divide_rows,]
+test_logit = logit_data[-divide_rows,]
+
+logit_model2 = glm(milk ~ sugar_g + calories + total_fat_g + total_carbs_g, 
+                  data = train_logit, family = "binomial")
+probabilities2 = logit_model2 %>% predict(test_logit, type = "response")
+predicted_class = ifelse(probabilities2 > 0.5, "Contains Milk", "No Milk Added")
+test_logit['Predicted2'] = as.numeric(predicted_class == "Contains Milk")
+
+actual_vals = test_logit$milk
+predicted_vals = test_logit$Predicted2
+table(actual_vals, predicted_vals)
+
+logit_model = glm(milk ~ sugar_g + calories + total_fat_g, data = train_logit,
+                  family = "binomial")
+probabilities = logit_model %>% predict(test_logit, type = "response")
+predicted_class = ifelse(probabilities > 0.5, "Contains Milk", "No Milk Added")
+test_logit['Predicted'] = as.numeric(predicted_class == "Contains Milk")
+
+predicted_vals = test_logit$Predicted
+table(actual_vals, predicted_vals)
+
+logit_accuracy = accuracy(test_logit$milk, 
+                          test_logit$Predicted)
+logit_recall = recall(test_logit$milk, 
+                      test_logit$Predicted)
+logit_precision = precision(test_logit$milk, 
+                            test_logit$Predicted)
+logit_accuracy2 = accuracy(test_logit$milk, 
+                          test_logit$Predicted2)
+logit_recall2 = recall(test_logit$milk, 
+                      test_logit$Predicted2)
+logit_precision2 = precision(test_logit$milk, 
+                            test_logit$Predicted2)
+
+c(logit_accuracy, logit_recall, logit_precision)
+c(logit_accuracy2, logit_recall2, logit_precision2)
+```
+
+```{r, eval = FALSE, fig.align = 'center'}
+modelled_data <- bind_rows(
+  tibble(truth = factor(train_logit$milk), 
+         estimate = fitted(logit_model),
+         model = "Base Logit"),
+  tibble(truth = factor(train_logit$milk),
+         estimate = fitted(logit_model2),
+         model = "Best Logit"))
+  
+roc_logit = modelled_data %>% 
+  group_by(model) %>% 
+  roc_curve(truth, estimate,
+            event_level = "second") #%>% 
+  #autoplot()
+```
+
+```{r, eval = FALSE}
+accuracies = rep(0, 1000)
+recalls = rep(0, 1000)
+precisions = rep(0, 1000)
+accuracies_2 = rep(0, 1000)
+recalls_2 = rep(0, 1000)
+precisions_2 = rep(0, 1000)
+set.seed(NULL)
+for(i in 1:1000){
+  divide_rows = sample(1:nrow(logit_data), 2/3*nrow(logit_data))
+  train_logit = logit_data[divide_rows,]
+  test_logit = logit_data[-divide_rows,]
+  
+  logit_model = glm(milk ~ sugar_g + calories + total_fat_g, data = train_logit, 
+                    family = "binomial")
+  logit_model2 = glm(milk ~ sugar_g + calories + total_fat_g + total_carbs_g, 
+                     data = train_logit, family = "binomial")
+  
+  probabilities = logit_model %>% predict(test_logit, type = "response")
+  predicted_class <- ifelse(probabilities > 0.5, "Contains Milk", "No Milk Added")
+  test_logit['Predicted'] <- predicted_class
+  
+  
+  accuracies[i] = accuracy(test_logit$milk, 
+                           as.numeric(test_logit$Predicted == "Contains Milk"))
+  recalls[i] = recall(test_logit$milk, 
+                      as.numeric(test_logit$Predicted == "Contains Milk"))
+  precisions[i] = precision(test_logit$milk, 
+                            as.numeric(test_logit$Predicted == "Contains Milk"))
+  
+  logit_model2 = glm(milk ~ sugar_g + calories + total_fat_g + total_carbs_g, 
+                     data = train_logit, family = "binomial")
+  probabilities2 = logit_model2 %>% predict(test_logit, type = "response")
+  predicted_class2 <- ifelse(probabilities2 > 0.5, "Contains Milk", "No Milk Added")
+  test_logit['Predicted2'] <- predicted_class2
+  
+  accuracies_2[i] = accuracy(test_logit$milk, 
+                             as.numeric(test_logit$Predicted2 == "Contains Milk"))
+  recalls_2[i] = recall(test_logit$milk, 
+                        as.numeric(test_logit$Predicted2 == "Contains Milk"))
+  precisions_2[i] = precision(test_logit$milk, 
+                              as.numeric(test_logit$Predicted2 == "Contains Milk"))
+  
+}
+
+logit_metrics = c(mean(accuracies), mean(recalls), mean(precisions))
+logit_metrics2 = c(mean(accuracies_2), mean(recalls_2), mean(precisions_2))
+
+logit_metrics
+logit_metrics2
+```
+
+```{r, eval = FALSE}
+#using whole milk to better balance the dataset
+#using min-max to normalize the data to keep only positive values
+nn_data = starbucks %>% filter(milk %in%  c(0,5), size == "grande")
+nn_data$milk = as.numeric(nn_data$milk == 5)
+nn_data = nn_data[,-c(2,4,5,8,9,13)]
+nn_data$calories = transform(nn_data$calories, method = "minmax")
+nn_data$total_fat_g = transform(nn_data$total_fat_g, method = "minmax")
+nn_data$cholesterol_mg = transform(nn_data$cholesterol_mg, method = "minmax")
+nn_data$sodium_mg = transform(nn_data$sodium_mg, method = "minmax")
+nn_data$total_carbs_g = transform(nn_data$total_carbs_g, method = "minmax")
+nn_data$sugar_g = transform(nn_data$sugar_g, method = "minmax")
+nn_data$caffeine_mg = transform(nn_data$caffeine_mg, method = "minmax")
+#lots of multicollinearity in dataset
+#attempt to use nearest neighbours instead
+set.seed(2)
+divide_rows = sample(1:nrow(nn_data), 2/3*nrow(nn_data))
+train_nn = nn_data[divide_rows,]
+test_nn = nn_data[-divide_rows,]
+
+#checking total_fat_g,  calories and sugar_g
+predictions = knn(train = train_nn[,c(3,4,8)], 
+                  test = test_nn[,c(3,4,8)],
+                  cl = train_nn[,2], k = 7)
+#add in total_carbs_g as per the logistic model
+predictions2 = class::knn(train = train_nn[,c(3,4,6,8)], 
+                          test = test_nn[,c(3,4,6,8)], 
+                          cl = train_nn$milk, k = 5)
+
+test_nn$predictions = as.factor(predictions)
+test_nn$predictions2 = as.factor(predictions2)
+
+acc_nn = accuracy(test_nn$milk, test_nn$predictions)
+rec_nn = recall(as.numeric(test_nn$milk == 1),
+                as.numeric(test_nn$predictions == 1))
+prec_nn = precision(test_nn$milk, test_nn$predictions)
+
+acc_nn2 = accuracy(test_nn$milk, test_nn$predictions2)
+rec_nn2 = recall(as.numeric(test_nn$milk == 1),
+                 as.numeric(test_nn$predictions2 == 1))
+prec_nn2 = precision(test_nn$milk, test_nn$predictions2)
+
+c(acc_nn, rec_nn, prec_nn)
+c(acc_nn2, rec_nn2, prec_nn2)
+```
+
+```{r, eval = FALSE, fig.align='center'}
+#visualize table values as a bar plot
+milk = test_nn$milk
+type = rep("actual", length(milk))
+actual = data.frame(milk, type)
+milk = test_nn$predictions
+type = rep("predictions", length(milk))
+predicts = data.frame(milk, type)
+milk = test_nn$predictions2
+type = rep("predictions2", length(milk))
+predicts2 = data.frame(milk, type)
+
+table_frame = rbind(actual, predicts, predicts2)
+
+table_frame %>% ggplot(aes(x = milk, fill = type)) + 
+  geom_bar(position = "dodge") +
+  scale_y_continuous(breaks = seq(0,24,2)) +
+  scale_fill_manual(values = c("#00704A","#66a18d","#b3d0c6"),
+                    labels = c("Actual", "Best, k-7 Model", "3-Var, k-7 Model")) +
+  labs(title = "Nearest Neighbour Model Comparison")
+``` 
+
+```{r, eval = FALSE}
+nn_accuracies = rep(0,1000)
+nn_recalls = rep(0,1000)
+nn_precisions = rep(0,1000)
+
+nn_accuracies2 = rep(0,1000)
+nn_recalls2 = rep(0,1000)
+nn_precisions2 = rep(0,1000)
+
+#again, sample 1000 times and take the mean metric values
+set.seed(NULL)
+for(i in 1:1000){
+  divide_rows = sample(1:nrow(nn_data), 2/3*nrow(nn_data))
+  train_nn = nn_data[divide_rows,]
+  test_nn = nn_data[-divide_rows,]
+  
+  predictions = knn(train = train_nn[,c(3,4,8)], test = test_nn[,c(3,4,8)],
+                    cl = train_nn[,2], k = 7)
+  predictions2 = knn(train = train_nn[,c(3,4,6,8)], test = test_nn[,c(3,4,6,8)],
+                    cl = train_nn[,2], k = 7)
+  
+  #most optimized k value is 7
+  actual_vals = as.numeric(test_nn$milk)
+  nn_accuracies[i] = accuracy(actual_vals, predictions)
+  nn_recalls[i] = recall(actual_vals, as.numeric(predictions == 1))
+  nn_precisions[i] = precision(actual_vals, predictions)
+  nn_accuracies2[i] = accuracy(actual_vals, predictions2)
+  nn_recalls2[i] = recall(actual_vals, as.numeric(predictions2 == 1))
+  nn_precisions2[i] = precision(actual_vals, predictions2)
+
+} 
+nn_metrics = c(mean(nn_accuracies), mean(nn_recalls), mean(nn_precisions))
+nn_metrics2 = c(mean(nn_accuracies2), mean(nn_recalls2), mean(nn_precisions2))
+```
+
+```{r, eval = FALSE}
+metric_accuracies = c(mean(accuracies_2), mean(accuracies),
+                      mean(nn_accuracies2), mean(nn_accuracies))
+metric_recalls = c(mean(recalls_2), mean(recalls),
+                   mean(nn_recalls2), mean(nn_recalls))
+metric_precisions = c(mean(precisions_2), mean(precisions), mean(nn_precisions2), mean(nn_precisions))
+models = c("Base_Logit", "Best_Logit", "Base_NN","Best_NN")
+compare_metrics = data.frame(metric_accuracies, metric_recalls, 
+                             metric_precisions, models)
+colnames(compare_metrics) = c("Mean Accuracy", 
+                              "Mean Recall", 
+                              "Mean Precision","Model")
+compare_metrics
+```
