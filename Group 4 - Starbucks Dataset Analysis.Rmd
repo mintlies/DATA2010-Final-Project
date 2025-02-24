@@ -3,9 +3,9 @@ title: "Group 4 - Starbucks Dataset Analysis"
 author: "Roselle Deinla, Amanda Tormey, Andrea Nguyen"
 date: "2023-04-06"
 output:
-  pdf_document: default
   html_document:
     df_print: paged
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -586,13 +586,28 @@ nn_data$caffeine_mg = transform(nn_data$caffeine_mg, method = "minmax")
 set.seed(2)
 divide_rows = sample(1:nrow(nn_data), 2/3*nrow(nn_data))
 train_nn = nn_data[divide_rows,]
+#there has been updates to the transform function since initially
+#creating this project
+#hence, hard-coded corrections are made below:
+train_nn_data3 = train_nn[,3][1]
+train_nn_data4 = train_nn[,4][1]
+train_nn_data6 = train_nn[,6][1]
+train_nn_data8 = train_nn[,8][1]
+train_nn_data = cbind(train_nn_data3, train_nn_data4, 
+                      train_nn_data6, train_nn_data8)
 test_nn = nn_data[-divide_rows,]
+test_nn_data3 = test_nn[,3][1]
+test_nn_data4 = test_nn[,4][1]
+test_nn_data6 = test_nn[,6][1]
+test_nn_data8 = test_nn[,8][1]
+test_nn_data = cbind(test_nn_data3, test_nn_data4, 
+                      test_nn_data6, test_nn_data8)
 
 #checking total_fat_g,  calories and sugar_g
-predictions = knn(train = train_nn[,c(3,4,8)], test = test_nn[,c(3,4,8)],
+predictions = knn(train = train_nn_data[,c(1,2,4)], test = test_nn_data[,c(1,2,4)],
                   cl = train_nn[,2], k = 7)
 #add in total_carbs_g as per the logistic model
-predictions2 = class::knn(train = train_nn[,c(3,4,6,8)], test = test_nn[,c(3,4,6,8)], 
+predictions2 = class::knn(train = train_nn_data, test = test_nn_data, 
                          cl = train_nn$milk, k = 5)
 
 test_nn$predictions = as.factor(predictions)
@@ -660,10 +675,24 @@ for(i in 1:1000){
   divide_rows = sample(1:nrow(nn_data), 2/3*nrow(nn_data))
   train_nn = nn_data[divide_rows,]
   test_nn = nn_data[-divide_rows,]
+  train_nn_data3 = train_nn[,3][1]
+  train_nn_data4 = train_nn[,4][1]
+  train_nn_data6 = train_nn[,6][1]
+  train_nn_data8 = train_nn[,8][1]
+  train_nn_data = cbind(train_nn_data3, train_nn_data4, 
+                        train_nn_data6, train_nn_data8)
+  test_nn = nn_data[-divide_rows,]
+  test_nn_data3 = test_nn[,3][1]
+  test_nn_data4 = test_nn[,4][1]
+  test_nn_data6 = test_nn[,6][1]
+  test_nn_data8 = test_nn[,8][1]
+  test_nn_data = cbind(test_nn_data3, test_nn_data4, 
+                        test_nn_data6, test_nn_data8)
   
-  predictions = knn(train = train_nn[,c(3,4,8)], test = test_nn[,c(3,4,8)],
+  predictions = knn(train = train_nn_data[,c(1,2,4)], 
+                    test = test_nn_data[,c(1,2,4)],
                     cl = train_nn[,2], k = 7)
-  predictions2 = knn(train = train_nn[,c(3,4,6,8)], test = test_nn[,c(3,4,6,8)],
+  predictions2 = knn(train = train_nn_data, test = test_nn_data,
                     cl = train_nn[,2], k = 7)
   
   #most optimized k value is 7
@@ -675,7 +704,6 @@ for(i in 1:1000){
   nn_recalls2[i] = recall(actual_vals, as.numeric(predictions2 == 1))
   nn_precisions2[i] = precision(actual_vals, predictions2)
   
-
 } 
 nn_metrics = c(mean(nn_accuracies), mean(nn_recalls), mean(nn_precisions))
 nn_metrics2 = c(mean(nn_accuracies2), mean(nn_recalls2), mean(nn_precisions2))
@@ -1127,16 +1155,29 @@ nn_data$caffeine_mg = transform(nn_data$caffeine_mg, method = "minmax")
 set.seed(2)
 divide_rows = sample(1:nrow(nn_data), 2/3*nrow(nn_data))
 train_nn = nn_data[divide_rows,]
+#there has been updates to the transform function since initially
+#creating this project
+#hence, hard-coded corrections are made below:
+train_nn_data3 = train_nn[,3][1]
+train_nn_data4 = train_nn[,4][1]
+train_nn_data6 = train_nn[,6][1]
+train_nn_data8 = train_nn[,8][1]
+train_nn_data = cbind(train_nn_data3, train_nn_data4, 
+                      train_nn_data6, train_nn_data8)
 test_nn = nn_data[-divide_rows,]
+test_nn_data3 = test_nn[,3][1]
+test_nn_data4 = test_nn[,4][1]
+test_nn_data6 = test_nn[,6][1]
+test_nn_data8 = test_nn[,8][1]
+test_nn_data = cbind(test_nn_data3, test_nn_data4, 
+                      test_nn_data6, test_nn_data8)
 
 #checking total_fat_g,  calories and sugar_g
-predictions = knn(train = train_nn[,c(3,4,8)], 
-                  test = test_nn[,c(3,4,8)],
+predictions = knn(train = train_nn_data[,c(1,2,4)], test = test_nn_data[,c(1,2,4)],
                   cl = train_nn[,2], k = 7)
 #add in total_carbs_g as per the logistic model
-predictions2 = class::knn(train = train_nn[,c(3,4,6,8)], 
-                          test = test_nn[,c(3,4,6,8)], 
-                          cl = train_nn$milk, k = 5)
+predictions2 = class::knn(train = train_nn_data, test = test_nn_data, 
+                         cl = train_nn$milk, k = 5)
 
 test_nn$predictions = as.factor(predictions)
 test_nn$predictions2 = as.factor(predictions2)
@@ -1192,10 +1233,24 @@ for(i in 1:1000){
   divide_rows = sample(1:nrow(nn_data), 2/3*nrow(nn_data))
   train_nn = nn_data[divide_rows,]
   test_nn = nn_data[-divide_rows,]
+  train_nn_data3 = train_nn[,3][1]
+  train_nn_data4 = train_nn[,4][1]
+  train_nn_data6 = train_nn[,6][1]
+  train_nn_data8 = train_nn[,8][1]
+  train_nn_data = cbind(train_nn_data3, train_nn_data4, 
+                        train_nn_data6, train_nn_data8)
+  test_nn = nn_data[-divide_rows,]
+  test_nn_data3 = test_nn[,3][1]
+  test_nn_data4 = test_nn[,4][1]
+  test_nn_data6 = test_nn[,6][1]
+  test_nn_data8 = test_nn[,8][1]
+  test_nn_data = cbind(test_nn_data3, test_nn_data4, 
+                        test_nn_data6, test_nn_data8)
   
-  predictions = knn(train = train_nn[,c(3,4,8)], test = test_nn[,c(3,4,8)],
+  predictions = knn(train = train_nn_data[,c(1,2,4)], 
+                    test = test_nn_data[,c(1,2,4)],
                     cl = train_nn[,2], k = 7)
-  predictions2 = knn(train = train_nn[,c(3,4,6,8)], test = test_nn[,c(3,4,6,8)],
+  predictions2 = knn(train = train_nn_data, test = test_nn_data,
                     cl = train_nn[,2], k = 7)
   
   #most optimized k value is 7
@@ -1206,10 +1261,15 @@ for(i in 1:1000){
   nn_accuracies2[i] = accuracy(actual_vals, predictions2)
   nn_recalls2[i] = recall(actual_vals, as.numeric(predictions2 == 1))
   nn_precisions2[i] = precision(actual_vals, predictions2)
-
+  
 } 
-nn_metrics = c(mean(nn_accuracies), mean(nn_recalls), mean(nn_precisions))
-nn_metrics2 = c(mean(nn_accuracies2), mean(nn_recalls2), mean(nn_precisions2))
+nn_metrics = c(mean(nn_accuracies), mean(nn_recalls), 
+               mean(nn_precisions))
+nn_metrics2 = c(mean(nn_accuracies2), mean(nn_recalls2), 
+                mean(nn_precisions2))
+
+nn_metrics
+nn_metrics2
 ```
 
 ```{r, eval = FALSE}
